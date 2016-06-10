@@ -38,6 +38,7 @@ _INPUT_FILE_PATH = resource_filename(
   "nupic.datafiles", "extra/hotgym/rec-center-hourly.csv"
 )
 _OUTPUT_PATH = "network-demo-output.csv"
+_OUTPUT_PATH_NEGATED = "network-demo-output-negated.csv"
 _NUM_RECORDS = 2000
 
 
@@ -103,31 +104,74 @@ def createNetwork(dataSource):
 
   return network
 
+def createNegatedNetwork(dataSource):
+  network = Network()
 
-def runNetwork(network, writer):
+  network.addRegion("sensor", "py.RecordSensor",
+                    json.dumps({"verbosity": _VERBOSITY}))
+  sensor = network.regions["sensor"].getSelf()
+  # The RecordSensor needs to know how to encode the input values
+  sensor.encoder = createEncoder()
+  # Specify the dataSource as a file record stream instance
+  sensor.dataSource = dataSource
+
+  # CUSTOM REGION
+  # Add path to custom region to PYTHONPATH
+  # NOTE: Before using a custom region, please modify your PYTHONPATH
+  # export PYTHONPATH="<path to custom region module>:$PYTHONPATH"
+  # In this demo, we have modified it using sys.path.append since we need it to
+  # have an effect on this program.
+  sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+  
+  from custom_region.negated_region import NegatedRegion
+
+  # Add custom region class to the network
+  Network.registerRegion(NegatedRegion)
+
+  # Create a custom region
+  network.addRegion("negatedRegion", "py.NegatedRegion",
+                    json.dumps({
+                      "dataWidth": sensor.encoder.getWidth(),
+                    }))
+
+  # Link the Identity region to the sensor output
+  network.link("sensor", "negatedRegion", "UniformLink", "")
+
+  network.initialize()
+
+  return network
+
+
+
+def runNetwork(network, writer, regionName):
   """Run the network and write output to writer.
 
   :param network: a Network instance to run
   :param writer: a csv.writer instance to write output to
   """
-  identityRegion = network.regions["identityRegion"]
+  customRegion = network.regions[regionName]
 
   for i in xrange(_NUM_RECORDS):
     # Run the network for a single iteration
     network.run(1)
 
     # Write out the record number and encoding
-    encoding = identityRegion.getOutputData("out")
+    encoding = customRegion.getOutputData("out")
     writer.writerow((i, encoding))
-
 
 
 if __name__ == "__main__":
   dataSource = FileRecordStream(streamID=_INPUT_FILE_PATH)
 
   network = createNetwork(dataSource)
+  negatedNetwork = createNegatedNetwork(dataSource)
   outputPath = os.path.join(os.path.dirname(__file__), _OUTPUT_PATH)
+  negatedOutputPath = os.path.join(os.path.dirname(__file__), _OUTPUT_PATH_NEGATED)
   with open(outputPath, "w") as outputFile:
     writer = csv.writer(outputFile)
     print "Writing output to %s" % outputPath
-    runNetwork(network, writer)
+    runNetwork(network, writer, "identityRegion")
+  with open(negatedOutputPath, "w") as negatedOutputFile:
+    negatedWriter = csv.writer(negatedOutputFile)
+    print "Writing negated output to %s" % negatedOutputPath
+    runNetwork(negatedNetwork, negatedWriter, "negatedRegion")
